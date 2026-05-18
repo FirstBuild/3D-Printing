@@ -5,51 +5,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$BambuddyPrinters = @(
-    @{
-        Name = "Barney"
-        Serial = "01P09C470802210"
-        Host = "192.168.68.69"
-        AccessCode = "9d546825"
-    },
-    @{
-        Name = "Betty"
-        Serial = "01P09C471501115"
-        Host = "192.168.68.71"
-        AccessCode = "b61e6e7c"
-    },
-    @{
-        Name = "Wilma"
-        Serial = "01P09C471501121"
-        Host = "192.168.68.74"
-        AccessCode = "22262617"
-    },
-    {
-        Name = "Dino"
-        Serial = "01P00C472400891"
-        Host = "10.206.49.138"
-        AccessCode = "2b20bff0"
-    },
-    @{
-        Name = "Pebbles"
-        Serial = "01P00C470801489"
-        Host = "10.206.50.75"
-        AccessCode = "067fae95"
-    },
-    @{
-        Name = "BamBam"
-        Serial = "01P00C471900468"
-        Host = "10.206.49.151"
-        AccessCode = "c6f70073"
-    },
-    @{
-        Name = "Engineering Printers (Virtual)"
-        Serial = "01P00A391800001"
-        Host = "bambuddy.local"
-        AccessCode = "12345678"
-        AlternateHosts = @("10.206.50.172", "192.168.68.81")
-    }
-)
+$BambuddyPrintersFile = Join-Path $PSScriptRoot "bambuddy-printers.json"
+$BambuddyPrinters = @()
 
 $EmbeddedCertText = @'
 -----BEGIN CERTIFICATE-----
@@ -139,6 +96,34 @@ function ConvertFrom-ConfigJson {
     # Strip full-line comments so valid JSON content can still be parsed.
     $textWithoutCommentLines = ($RawText -replace '(?m)^\s*#.*(?:\r?\n|$)', "")
     return $textWithoutCommentLines | ConvertFrom-Json -ErrorAction Stop
+}
+
+function Get-BambuddyPrinters {
+    param([string]$Path)
+
+    if (-not (Test-Path $Path)) {
+        throw "Printer definition file not found: $Path"
+    }
+
+    $raw = Get-Content -Raw -Path $Path
+    $printers = $raw | ConvertFrom-Json -ErrorAction Stop
+    $result = @()
+    foreach ($printer in $printers) {
+        $p = @{
+            Name = $printer.name
+            Serial = $printer.serial
+            Host = $printer.host
+            AccessCode = $printer.access_code
+        }
+
+        if ($printer.PSObject.Properties.Name -contains "alternate_hosts" -and $null -ne $printer.alternate_hosts) {
+            $p.AlternateHosts = @($printer.alternate_hosts)
+        }
+
+        $result += $p
+    }
+
+    return $result
 }
 
 function Write-JsonFile {
@@ -386,6 +371,8 @@ function Configure-Printers {
         Write-Host "Configured Bambuddy printers in: $configPath"
     }
 }
+
+$BambuddyPrinters = Get-BambuddyPrinters -Path $BambuddyPrintersFile
 
 if ($CertFile) {
     if (-not (Test-Path $CertFile)) {

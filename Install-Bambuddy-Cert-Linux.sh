@@ -3,54 +3,10 @@ set -euo pipefail
 
 CERT_FILE=""
 APPIMAGE_ROOT=""
-BAMBUDDY_PRINTERS_JSON="$(cat <<'EOF'
-[
-  {
-    "name": "Barney",
-    "serial": "01P09C470802210",
-    "host": "192.168.68.69",
-    "access_code": "9d546825"
-  },
-  {
-    "name": "Betty",
-    "serial": "01P09C471501115",
-    "host": "192.168.68.71",
-    "access_code": "b61e6e7c"
-  },
-  {
-    "name": "Wilma",
-    "serial": "01P09C471501121",
-    "host": "192.168.68.74",
-    "access_code": "22262617"
-  },
-  {
-    "name": "Dino",
-    "serial": "01P00C472400891",
-    "host": "10.206.49.138",
-    "access_code": "2b20bff0"
-  },
-  {
-    "name": "Pebbles",
-    "serial": "01P00C470801489",
-    "host": "10.206.50.75",
-    "access_code": "067fae95"
-  },
-  {
-    "name": "BamBam",
-    "serial": "01P00C471900468",
-    "host": "10.206.49.151",
-    "access_code": "c6f70073"
-  },
-  {
-    "name": "Engineering Printers (Virtual)",
-    "serial": "01P00A391800001",
-    "host": "bambuddy.local",
-    "access_code": "12345678",
-    "alternate_hosts": ["10.206.50.172", "192.168.68.81"]
-  }
-]
-EOF
-)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PRINTERS_FILE="$SCRIPT_DIR/bambuddy-printers.json"
+[[ -f "$PRINTERS_FILE" ]] || { echo "Printer definition file not found: $PRINTERS_FILE"; exit 1; }
+BAMBUDDY_PRINTERS_JSON="$(cat "$PRINTERS_FILE")"
 EMBEDDED_CERT_TEXT="$(cat <<'EOF'
 -----BEGIN CERTIFICATE-----
 MIIC7jCCAdagAwIBAgIUUmyk3xDkK7Y+H0YULvJNkM0tZ0YwDQYJKoZIhvcNAQEL
