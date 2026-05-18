@@ -132,6 +132,15 @@ function ConvertTo-ConfigHashtable {
     return $hash
 }
 
+function ConvertFrom-ConfigJson {
+    param([string]$RawText)
+
+    # Some slicer config files append metadata lines like '# MD5: ...' after the JSON body.
+    # Strip full-line comments so valid JSON content can still be parsed.
+    $textWithoutCommentLines = ($RawText -replace '(?m)^\s*#.*(?:\r?\n|$)', "")
+    return $textWithoutCommentLines | ConvertFrom-Json -ErrorAction Stop
+}
+
 function Write-JsonFile {
     param(
         [string]$Path,
@@ -342,7 +351,7 @@ function Configure-Printers {
                 $config = @{}
             } else {
                 try {
-                    $config = ConvertTo-ConfigHashtable ($raw | ConvertFrom-Json -ErrorAction Stop)
+                    $config = ConvertTo-ConfigHashtable (ConvertFrom-ConfigJson -RawText $raw)
                 } catch {
                     Write-Warning "Skipping config update for '$configPath' because it is not valid JSON: $($_.Exception.Message)"
                     continue
