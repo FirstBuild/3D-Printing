@@ -168,14 +168,20 @@ function Set-ConfigMapValue {
     $Config[$MapName] = $map
 }
 
+function ConvertTo-UInt32Wrap {
+    param([object]$Value)
+
+    return [uint32](([int64]$Value) -band 4294967295)
+}
+
 function Get-BambuFnvSeed {
     param([string]$Text)
 
     [uint32]$seed = 2166136261
     $bytes = [System.Text.Encoding]::UTF8.GetBytes($Text)
     foreach ($byte in $bytes) {
-        $seed = [uint32]($seed -bxor [uint32]$byte)
-        $seed = [uint32]((([uint64]$seed * 16777619) -band 0xffffffff))
+        $seed = ConvertTo-UInt32Wrap ($seed -bxor [uint32]$byte)
+        $seed = ConvertTo-UInt32Wrap (([uint64]$seed * 16777619))
     }
 
     return $seed
@@ -187,8 +193,9 @@ function New-Mt19937State {
     $mt = New-Object 'UInt32[]' 624
     $mt[0] = $Seed
     for ($i = 1; $i -lt 624; $i++) {
-        $x = [uint32]($mt[$i - 1] -bxor ($mt[$i - 1] -shr 30))
-        $mt[$i] = [uint32]((([uint64]1812433253 * [uint64]$x + [uint64]$i) -band 0xffffffff))
+        $x = ConvertTo-UInt32Wrap ($mt[$i - 1] -bxor ($mt[$i - 1] -shr 30))
+        $mt[$i] = ConvertTo-UInt32Wrap (([uint64]1812433253 * [uint64]$x + [uint64]$i)
+)
     }
 
     return [pscustomobject]@{
@@ -201,12 +208,12 @@ function Invoke-Mt19937Twist {
     param([object]$State)
 
     for ($i = 0; $i -lt 624; $i++) {
-        $y = (($State.Mt[$i] -band 0x80000000) + ($State.Mt[($i + 1) % 624] -band 0x7fffffff))
-        $value = [uint32]($State.Mt[($i + 397) % 624] -bxor [uint32]($y -shr 1))
+        $y = (($State.Mt[$i] -band 2147483648) + ($State.Mt[($i + 1) % 624] -band 2147483647))
+        $value = ConvertTo-UInt32Wrap ($State.Mt[($i + 397) % 624] -bxor (ConvertTo-UInt32Wrap ($y -shr 1)))
         if (($y -band 1) -ne 0) {
-            $value = [uint32]($value -bxor 0x9908b0df)
+            $value = ConvertTo-UInt32Wrap ($value -bxor 2567483615)
         }
-        $State.Mt[$i] = [uint32]($value -band 0xffffffff)
+        $State.Mt[$i] = ConvertTo-UInt32Wrap $value
     }
 
     $State.Index = 0
@@ -221,12 +228,12 @@ function Get-Mt19937Random {
 
     [uint32]$y = $State.Mt[$State.Index]
     $State.Index += 1
-    $y = [uint32]($y -bxor ($y -shr 11))
-    $y = [uint32]($y -bxor (($y -shl 7) -band 0x9d2c5680))
-    $y = [uint32]($y -bxor (($y -shl 15) -band 0xefc60000))
-    $y = [uint32]($y -bxor ($y -shr 18))
+    $y = ConvertTo-UInt32Wrap ($y -bxor ($y -shr 11))
+    $y = ConvertTo-UInt32Wrap ($y -bxor (($y -shl 7) -band 2636928640))
+    $y = ConvertTo-UInt32Wrap ($y -bxor (($y -shl 15) -band 4022730752))
+    $y = ConvertTo-UInt32Wrap ($y -bxor ($y -shr 18))
 
-    return [uint32]($y -band 0xffffffff)
+    return (ConvertTo-UInt32Wrap $y)
 }
 
 function ConvertTo-BambuEncodedDevIp {
