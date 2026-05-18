@@ -3,6 +3,54 @@ set -euo pipefail
 
 CERT_FILE=""
 APPIMAGE_ROOT=""
+BAMBUDDY_PRINTERS_JSON="$(cat <<'EOF'
+[
+  {
+    "name": "Barney",
+    "serial": "01P09C470802210",
+    "host": "192.168.68.69",
+    "access_code": "9d546825"
+  },
+  {
+    "name": "Betty",
+    "serial": "01P09C471501115",
+    "host": "192.168.68.71",
+    "access_code": "b61e6e7c"
+  },
+  {
+    "name": "Wilma",
+    "serial": "01P09C471501121",
+    "host": "192.168.68.74",
+    "access_code": "22262617"
+  },
+  {
+    "name": "Dino",
+    "serial": "01P00C472400891",
+    "host": "10.206.49.138",
+    "access_code": "2b20bff0"
+  },
+  {
+    "name": "Pebbles",
+    "serial": "01P00C470801489",
+    "host": "10.206.50.75",
+    "access_code": "067fae95"
+  },
+  {
+    "name": "BamBam",
+    "serial": "01P00C471900468",
+    "host": "10.206.49.151",
+    "access_code": "c6f70073"
+  },
+  {
+    "name": "Engineering Printers (Virtual)",
+    "serial": "01P00A391800001",
+    "host": "bambuddy.local",
+    "access_code": "12345678",
+    "alternate_hosts": ["10.206.50.172", "192.168.68.81"]
+  }
+]
+EOF
+)"
 EMBEDDED_CERT_TEXT="$(cat <<'EOF'
 -----BEGIN CERTIFICATE-----
 MIIC7jCCAdagAwIBAgIUUmyk3xDkK7Y+H0YULvJNkM0tZ0YwDQYJKoZIhvcNAQEL
@@ -34,6 +82,7 @@ Usage:
 Options:
   --appimage-root PATH       Path to extracted AppImage squashfs-root
   --cert PATH                Override embedded Bambuddy CA certificate file
+  --skip-printers            Install the certificate only
 
 Examples:
   sudo ./install-bambuddy-cert-linux.sh
@@ -54,6 +103,10 @@ while [[ $# -gt 0 ]]; do
     --appimage-root)
       APPIMAGE_ROOT="${2:-}"
       shift 2
+      ;;
+    --skip-printers)
+      BAMBUDDY_PRINTERS_JSON="[]"
+      shift
       ;;
     *)
       usage
@@ -125,9 +178,13 @@ install_direct() {
 
   if [[ -n "$APPIMAGE_ROOT" ]]; then
     targets+=("$APPIMAGE_ROOT/usr/share/Bambu Studio/resources/cert/printer.cer")
+    targets+=("$APPIMAGE_ROOT/usr/share/BambuStudioBeta/resources/cert/printer.cer")
+    targets+=("$APPIMAGE_ROOT/usr/share/Bambu Studio Beta/resources/cert/printer.cer")
     targets+=("$APPIMAGE_ROOT/usr/share/OrcaSlicer/resources/cert/printer.cer")
   else
     targets+=("/usr/share/Bambu Studio/resources/cert/printer.cer")
+    targets+=("/usr/share/BambuStudioBeta/resources/cert/printer.cer")
+    targets+=("/usr/share/Bambu Studio Beta/resources/cert/printer.cer")
     targets+=("/usr/share/OrcaSlicer/resources/cert/printer.cer")
   fi
 
@@ -136,7 +193,165 @@ install_direct() {
   done
 }
 
+configure_printers() {
+  BAMBUDDY_PRINTERS_JSON="$BAMBUDDY_PRINTERS_JSON" BAMBUDDY_APPIMAGE_ROOT="$APPIMAGE_ROOT" python3 - <<'PY'
+import datetime
+import json
+import os
+import pathlib
+import pwd
+import shutil
+import uuid
+
+printers = json.loads(os.environ["BAMBUDDY_PRINTERS_JSON"])
+if not printers:
+    raise SystemExit(0)
+
+def user_home():
+    sudo_user = os.environ.get("SUDO_USER")
+    if sudo_user and sudo_user != "root":
+        return pathlib.Path(pwd.getpwnam(sudo_user).pw_dir)
+    return pathlib.Path.home()
+
+home = user_home()
+appimage_root = os.environ.get("BAMBUDDY_APPIMAGE_ROOT")
+configs = [
+    {
+        "path": home / ".config" / "BambuStudio" / "BambuStudio.conf",
+        "markers": [pathlib.Path("/usr/share/Bambu Studio")],
+    },
+    {
+        "path": home / ".config" / "BambuStudioBeta" / "BambuStudio.conf",
+        "markers": [
+            pathlib.Path("/usr/share/BambuStudioBeta"),
+            pathlib.Path("/usr/share/Bambu Studio Beta"),
+        ],
+    },
+    {
+        "path": home / ".config" / "OrcaSlicer" / "OrcaSlicer.conf",
+        "markers": [pathlib.Path("/usr/share/OrcaSlicer")],
+    },
+]
+
+if appimage_root:
+    root = pathlib.Path(appimage_root)
+    configs[0]["markers"].append(root / "usr/share/Bambu Studio")
+    configs[1]["markers"].extend([
+        root / "usr/share/BambuStudioBeta",
+        root / "usr/share/Bambu Studio Beta",
+    ])
+    configs[2]["markers"].append(root / "usr/share/OrcaSlicer")
+
+def should_patch(entry):
+    path = entry["path"]
+    return path.exists() or any(marker.exists() for marker in entry["markers"])
+
+class Mt19937:
+    def __init__(self, seed):
+        self.mt = [0] * 624
+        self.index = 624
+        self.mt[0] = seed & 0xFFFFFFFF
+        for i in range(1, 624):
+            self.mt[i] = (1812433253 * (self.mt[i - 1] ^ (self.mt[i - 1] >> 30)) + i) & 0xFFFFFFFF
+
+    def twist(self):
+        for i in range(624):
+            y = (self.mt[i] & 0x80000000) + (self.mt[(i + 1) % 624] & 0x7FFFFFFF)
+            self.mt[i] = self.mt[(i + 397) % 624] ^ (y >> 1)
+            if y & 1:
+                self.mt[i] ^= 0x9908B0DF
+            self.mt[i] &= 0xFFFFFFFF
+        self.index = 0
+
+    def rand(self):
+        if self.index >= 624:
+            self.twist()
+        y = self.mt[self.index]
+        self.index += 1
+        y ^= y >> 11
+        y ^= (y << 7) & 0x9D2C5680
+        y ^= (y << 15) & 0xEFC60000
+        y ^= y >> 18
+        return y & 0xFFFFFFFF
+
+def encode_dev_ip(host, slicer_uuid):
+    if not host or not slicer_uuid:
+        return host
+    seed = 2166136261
+    for ch in slicer_uuid.encode("utf-8"):
+        seed ^= ch
+        seed = (seed * 16777619) & 0xFFFFFFFF
+    rng = Mt19937(seed)
+    return bytes((b ^ (rng.rand() & 0xFF)) for b in host.encode("utf-8")).hex()
+
+def get_connect_host(printer):
+    host = printer["host"]
+    if all(part.isdigit() and 0 <= int(part) <= 255 for part in host.split(".")) and host.count(".") == 3:
+        return host
+    alternate_hosts = printer.get("alternate_hosts") or []
+    return alternate_hosts[0] if alternate_hosts else host
+
+def ensure_slicer_uuid(config):
+    app_config = config.get("app")
+    if app_config is None:
+        app_config = {}
+        config["app"] = app_config
+    elif not isinstance(app_config, dict):
+        raise SystemExit("Config key is not an object: app")
+
+    slicer_uuid = app_config.get("slicer_uuid") or config.get("slicer_uuid")
+    if not slicer_uuid:
+        slicer_uuid = str(uuid.uuid4())
+    app_config["slicer_uuid"] = slicer_uuid
+    return slicer_uuid
+
+def load_config(path):
+    if not path.exists():
+        return {}
+    text = path.read_text()
+    if not text.strip():
+        return {}
+    return json.loads(text)
+
+def patch_config(path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    config = load_config(path)
+    if not isinstance(config, dict):
+        raise SystemExit(f"Config root is not an object: {path}")
+
+    slicer_uuid = ensure_slicer_uuid(config)
+
+    for key in ("access_code", "user_access_code", "ip_address", "user_access_dev_ip"):
+        current = config.get(key)
+        if current is None:
+            config[key] = {}
+        elif not isinstance(current, dict):
+            raise SystemExit(f"Config key is not an object: {path}: {key}")
+
+    for printer in printers:
+        serial = printer["serial"]
+        connect_host = get_connect_host(printer)
+        config["access_code"][serial] = printer["access_code"]
+        config["user_access_code"][serial] = printer["access_code"]
+        config["ip_address"][serial] = connect_host
+        config["user_access_dev_ip"][serial] = encode_dev_ip(connect_host, slicer_uuid)
+
+    if path.exists():
+        backup = path.with_name(path.name + ".bak." + datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
+        shutil.copy2(path, backup)
+        print(f"Config backup created: {backup}")
+
+    path.write_text(json.dumps(config, indent=4, ensure_ascii=False) + "\n")
+    print(f"Configured Bambuddy printers in: {path}")
+
+for entry in configs:
+    if should_patch(entry):
+        patch_config(entry["path"])
+PY
+}
+
 install_direct
+configure_printers
 
 echo ""
-echo "Done. Fully quit and restart Bambu Studio / OrcaSlicer."
+echo "Done. Fully quit and restart Bambu Studio / Bambu Studio Beta / OrcaSlicer."
