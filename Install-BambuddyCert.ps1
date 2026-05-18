@@ -341,7 +341,12 @@ function Configure-Printers {
             if ([string]::IsNullOrWhiteSpace($raw)) {
                 $config = @{}
             } else {
-                $config = ConvertTo-ConfigHashtable ($raw | ConvertFrom-Json)
+                try {
+                    $config = ConvertTo-ConfigHashtable ($raw | ConvertFrom-Json -ErrorAction Stop)
+                } catch {
+                    Write-Warning "Skipping config update for '$configPath' because it is not valid JSON: $($_.Exception.Message)"
+                    continue
+                }
             }
 
             $backup = "$configPath.bak.$(Get-Date -Format 'yyyyMMdd-HHmmss')"
