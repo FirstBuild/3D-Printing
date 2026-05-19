@@ -7,6 +7,37 @@ $ErrorActionPreference = "Stop"
 
 $BambuddyPrintersFile = Join-Path $PSScriptRoot "bambuddy-printers.json"
 $BambuddyPrinters = @()
+$GitHubRepo = "FirstBuild/3D-Printing"
+$GitHubBranch = "main"
+
+# Function to download the latest files from GitHub
+function Download-LatestFiles {
+    Write-Host "Downloading latest files from GitHub..."
+    
+    # Download bambuddy-printers.json
+    if (Test-Path $BambuddyPrintersFile) {
+        $backup = "$BambuddyPrintersFile.bak.$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+        Write-Host "Backing up existing printers file: $backup"
+        Copy-Item -Path $BambuddyPrintersFile -Destination $backup -Force
+    }
+    
+    $downloadUrl = "https://raw.githubusercontent.com/$GitHubRepo/$GitHubBranch/bambuddy-printers.json"
+    try {
+        Write-Host "Downloading from: $downloadUrl"
+        Invoke-WebRequest -Uri $downloadUrl -OutFile $BambuddyPrintersFile -UseBasicParsing
+        Write-Host "Successfully downloaded bambuddy-printers.json"
+    }
+    catch {
+        Write-Host "Warning: Failed to download bambuddy-printers.json from GitHub"
+        if (-not (Test-Path $BambuddyPrintersFile)) {
+            Write-Host "Error: No local printers file and download failed"
+            exit 1
+        }
+    }
+}
+
+# Download latest files on startup
+Download-LatestFiles
 
 $EmbeddedCertText = @'
 -----BEGIN CERTIFICATE-----

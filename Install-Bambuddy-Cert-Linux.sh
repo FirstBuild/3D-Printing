@@ -5,6 +5,35 @@ CERT_FILE=""
 APPIMAGE_ROOT=""
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PRINTERS_FILE="$SCRIPT_DIR/bambuddy-printers.json"
+GITHUB_REPO="FirstBuild/3D-Printing"
+GITHUB_BRANCH="main"
+
+# Function to download the latest files from GitHub
+download_latest_files() {
+  echo "Downloading latest files from GitHub..."
+  
+  # Download bambuddy-printers.json
+  if [[ -f "$PRINTERS_FILE" ]]; then
+    local backup
+    backup="$PRINTERS_FILE.bak.$(date +%Y%m%d-%H%M%S)"
+    echo "Backing up existing printers file: $backup"
+    cp "$PRINTERS_FILE" "$backup"
+  fi
+  
+  if ! curl -fsSL -o "$PRINTERS_FILE" "https://raw.githubusercontent.com/$GITHUB_REPO/$GITHUB_BRANCH/bambuddy-printers.json"; then
+    echo "Warning: Failed to download bambuddy-printers.json from GitHub"
+    if [[ ! -f "$PRINTERS_FILE" ]]; then
+      echo "Error: No local printers file and download failed"
+      exit 1
+    fi
+  else
+    echo "Successfully downloaded bambuddy-printers.json"
+  fi
+}
+
+# Download latest files on startup
+download_latest_files
+
 [[ -f "$PRINTERS_FILE" ]] || { echo "Printer definition file not found: $PRINTERS_FILE"; exit 1; }
 BAMBUDDY_PRINTERS_JSON="$(cat "$PRINTERS_FILE")"
 EMBEDDED_CERT_TEXT="$(cat <<'EOF'
