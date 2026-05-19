@@ -18,25 +18,7 @@
     "access_code": "f99827ae"
   },
   {
-    "name": "Dino",
-    "serial": "01P00C472400891",
-    "host": "10.206.49.138",
-    "access_code": "2b20bff0"
-  },
-  {
-    "name": "Pebbles",
-    "serial": "01P00C470801489",
-    "host": "10.206.50.75",
-    "access_code": "067fae95"
-  },
-  {
-    "name": "BamBam",
-    "serial": "01P00C471900468",
-    "host": "10.206.49.151",
-    "access_code": "c6f70073"
-  },
-  {
-    "name": "Engineering Printers (Virtual)",
+    "name": "Printer Queue",
     "serial": "01P00A391800001",
     "host": "bambuddy.local",
     "access_code": "12345678",
