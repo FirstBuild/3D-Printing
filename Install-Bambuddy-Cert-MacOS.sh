@@ -5,7 +5,7 @@ CERT_FILE=""
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PRINTERS_FILE="$SCRIPT_DIR/bambuddy-printers.json"
 GITHUB_REPO="FirstBuild/3D-Printing"
-GITHUB_BRANCH="main"
+GITHUB_BRANCH="AddPrinters"
 
 # Function to download the latest files from GitHub
 download_latest_files() {
