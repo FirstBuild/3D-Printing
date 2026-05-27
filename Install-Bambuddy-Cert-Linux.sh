@@ -5,35 +5,6 @@ CERT_FILE=""
 APPIMAGE_ROOT=""
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PRINTERS_FILE="$SCRIPT_DIR/bambuddy-printers.json"
-GITHUB_REPO="FirstBuild/3D-Printing"
-GITHUB_BRANCH="main"
-
-# Function to download the latest files from GitHub
-download_latest_files() {
-  echo "Downloading latest files from GitHub..."
-  
-  # Download bambuddy-printers.json
-  if [[ -f "$PRINTERS_FILE" ]]; then
-    local backup
-    backup="$PRINTERS_FILE.bak.$(date +%Y%m%d-%H%M%S)"
-    echo "Backing up existing printers file: $backup"
-    cp "$PRINTERS_FILE" "$backup"
-  fi
-  
-  if ! curl -fsSL -o "$PRINTERS_FILE" "https://raw.githubusercontent.com/$GITHUB_REPO/$GITHUB_BRANCH/bambuddy-printers.json"; then
-    echo "Warning: Failed to download bambuddy-printers.json from GitHub"
-    if [[ ! -f "$PRINTERS_FILE" ]]; then
-      echo "Error: No local printers file and download failed"
-      exit 1
-    fi
-  else
-    echo "Successfully downloaded bambuddy-printers.json"
-  fi
-}
-
-# Download latest files on startup
-download_latest_files
-
 [[ -f "$PRINTERS_FILE" ]] || { echo "Printer definition file not found: $PRINTERS_FILE"; exit 1; }
 BAMBUDDY_PRINTERS_JSON="$(cat "$PRINTERS_FILE")"
 EMBEDDED_CERT_TEXT="$(cat <<'EOF'
@@ -180,7 +151,11 @@ install_direct() {
 
 configure_printers() {
   BAMBUDDY_PRINTERS_JSON="$BAMBUDDY_PRINTERS_JSON" BAMBUDDY_APPIMAGE_ROOT="$APPIMAGE_ROOT" python3 - <<'PY'
+import base64
 import datetime
+import getpass
+import hashlib
+import hmac
 import json
 import os
 import pathlib
@@ -188,7 +163,81 @@ import pwd
 import shutil
 import uuid
 
-printers = json.loads(os.environ["BAMBUDDY_PRINTERS_JSON"])
+raw_printers = json.loads(os.environ["BAMBUDDY_PRINTERS_JSON"])
+if not raw_printers:
+    raise SystemExit(0)
+
+staff_password = os.environ.get("BAMBUDDY_STAFF_PASSWORD", "")
+staff_password_prompted = False
+
+def get_staff_password():
+    global staff_password, staff_password_prompted
+    if staff_password:
+        return staff_password
+    if staff_password_prompted:
+        return ""
+    staff_password_prompted = True
+    try:
+        entered = getpass.getpass("Enter staff printer password (leave blank to skip staff-only printers): ")
+    except Exception:
+        entered = ""
+    staff_password = entered.strip()
+    return staff_password
+
+def decrypt_access_code(encoded, password):
+    parts = encoded.split(":")
+    if len(parts) != 6 or parts[0] != "enc-v1":
+        raise ValueError("unsupported encrypted access code format")
+
+    iterations = int(parts[1])
+    if iterations < 10000:
+        raise ValueError("invalid KDF iteration count")
+
+    salt = base64.b64decode(parts[2])
+    nonce = base64.b64decode(parts[3])
+    ciphertext = base64.b64decode(parts[4])
+    expected_mac = base64.b64decode(parts[5])
+
+    key_material = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations, dklen=64)
+    enc_key = key_material[:32]
+    mac_key = key_material[32:]
+
+    actual_mac = hmac.new(mac_key, nonce + ciphertext, hashlib.sha256).digest()
+    if not hmac.compare_digest(actual_mac, expected_mac):
+        raise ValueError("wrong password or tampered encrypted access code")
+
+    keystream = bytearray()
+    counter = 0
+    while len(keystream) < len(ciphertext):
+        counter_bytes = counter.to_bytes(4, byteorder="big", signed=False)
+        keystream.extend(hmac.new(enc_key, nonce + counter_bytes, hashlib.sha256).digest())
+        counter += 1
+
+    plaintext = bytes(c ^ k for c, k in zip(ciphertext, keystream))
+    return plaintext.decode("utf-8")
+
+printers = []
+for printer in raw_printers:
+    access_code = (printer.get("access_code") or "").strip()
+    if not access_code and printer.get("encrypted_access_code"):
+        password = get_staff_password()
+        if not password:
+            print(f"Skipping staff printer '{printer.get('name', 'unknown')}' because no staff password was supplied.")
+            continue
+        try:
+            access_code = decrypt_access_code(printer["encrypted_access_code"], password)
+        except Exception as ex:
+            print(f"Skipping staff printer '{printer.get('name', 'unknown')}': {ex}")
+            continue
+
+    if not access_code:
+        print(f"Skipping printer '{printer.get('name', 'unknown')}' because it does not contain a usable access code.")
+        continue
+
+    next_printer = dict(printer)
+    next_printer["access_code"] = access_code
+    printers.append(next_printer)
+
 if not printers:
     raise SystemExit(0)
 

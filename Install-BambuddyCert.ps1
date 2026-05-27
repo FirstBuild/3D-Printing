@@ -1,6 +1,7 @@
 param(
     [string]$CertFile = $null,
-    [switch]$SkipPrinters
+    [switch]$SkipPrinters,
+    [string]$StaffPassword = $null
 )
 
 $ErrorActionPreference = "Stop"
@@ -129,6 +130,190 @@ function ConvertFrom-ConfigJson {
     return $textWithoutCommentLines | ConvertFrom-Json -ErrorAction Stop
 }
 
+function ConvertFrom-Base64Text {
+    param([string]$Value)
+
+    return [Convert]::FromBase64String($Value)
+}
+
+function ConvertTo-Base64Text {
+    param([byte[]]$Value)
+
+    return [Convert]::ToBase64String($Value)
+}
+
+function ConvertTo-Utf8Bytes {
+    param([string]$Value)
+
+    return [System.Text.Encoding]::UTF8.GetBytes($Value)
+}
+
+function Invoke-HmacSha256 {
+    param(
+        [byte[]]$Key,
+        [byte[]]$Data
+    )
+
+    $hmac = [System.Security.Cryptography.HMACSHA256]::new($Key)
+    try {
+        return $hmac.ComputeHash($Data)
+    }
+    finally {
+        $hmac.Dispose()
+    }
+}
+
+function Get-Pbkdf2KeyMaterial {
+    param(
+        [string]$Password,
+        [byte[]]$Salt,
+        [int]$Iterations,
+        [int]$Length
+    )
+
+    $kdf = [System.Security.Cryptography.Rfc2898DeriveBytes]::new(
+        $Password,
+        $Salt,
+        $Iterations,
+        [System.Security.Cryptography.HashAlgorithmName]::SHA256
+    )
+    try {
+        return $kdf.GetBytes($Length)
+    }
+    finally {
+        $kdf.Dispose()
+    }
+}
+
+function New-HmacStreamXor {
+    param(
+        [byte[]]$Input,
+        [byte[]]$Key,
+        [byte[]]$Nonce
+    )
+
+    $output = New-Object byte[] $Input.Length
+    $offset = 0
+    $counter = 0
+    while ($offset -lt $Input.Length) {
+        $counterBytes = [BitConverter]::GetBytes([uint32]$counter)
+        [Array]::Reverse($counterBytes)
+
+        $blockInput = New-Object byte[] ($Nonce.Length + 4)
+        [Array]::Copy($Nonce, 0, $blockInput, 0, $Nonce.Length)
+        [Array]::Copy($counterBytes, 0, $blockInput, $Nonce.Length, 4)
+
+        $block = Invoke-HmacSha256 -Key $Key -Data $blockInput
+        $remaining = $Input.Length - $offset
+        $take = [Math]::Min($remaining, $block.Length)
+        for ($i = 0; $i -lt $take; $i++) {
+            $output[$offset + $i] = $Input[$offset + $i] -bxor $block[$i]
+        }
+
+        $offset += $take
+        $counter += 1
+    }
+
+    return $output
+}
+
+function Test-ByteArraysEqualConstantTime {
+    param(
+        [byte[]]$Left,
+        [byte[]]$Right
+    )
+
+    if ($Left.Length -ne $Right.Length) {
+        return $false
+    }
+
+    $diff = 0
+    for ($i = 0; $i -lt $Left.Length; $i++) {
+        $diff = $diff -bor ($Left[$i] -bxor $Right[$i])
+    }
+
+    return ($diff -eq 0)
+}
+
+function Unprotect-AccessCode {
+    param(
+        [string]$Encoded,
+        [string]$Password
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Password)) {
+        throw "Missing staff password."
+    }
+
+    $parts = $Encoded.Split(":")
+    if ($parts.Count -ne 6 -or $parts[0] -ne "enc-v1") {
+        throw "Unsupported encrypted access code format."
+    }
+
+    $iterations = 0
+    if (-not [int]::TryParse($parts[1], [ref]$iterations) -or $iterations -lt 10000) {
+        throw "Invalid KDF iteration count."
+    }
+
+    $salt = ConvertFrom-Base64Text -Value $parts[2]
+    $nonce = ConvertFrom-Base64Text -Value $parts[3]
+    $ciphertext = ConvertFrom-Base64Text -Value $parts[4]
+    $expectedMac = ConvertFrom-Base64Text -Value $parts[5]
+
+    $keyMaterial = Get-Pbkdf2KeyMaterial -Password $Password -Salt $salt -Iterations $iterations -Length 64
+    $encKey = New-Object byte[] 32
+    $macKey = New-Object byte[] 32
+    [Array]::Copy($keyMaterial, 0, $encKey, 0, 32)
+    [Array]::Copy($keyMaterial, 32, $macKey, 0, 32)
+
+    $macInput = New-Object byte[] ($nonce.Length + $ciphertext.Length)
+    [Array]::Copy($nonce, 0, $macInput, 0, $nonce.Length)
+    [Array]::Copy($ciphertext, 0, $macInput, $nonce.Length, $ciphertext.Length)
+    $actualMac = Invoke-HmacSha256 -Key $macKey -Data $macInput
+    if (-not (Test-ByteArraysEqualConstantTime -Left $actualMac -Right $expectedMac)) {
+        throw "Wrong password or tampered encrypted access code."
+    }
+
+    $plainBytes = New-HmacStreamXor -Input $ciphertext -Key $encKey -Nonce $nonce
+    return [System.Text.Encoding]::UTF8.GetString($plainBytes)
+}
+
+$script:StaffPasswordPrompted = $false
+$script:ResolvedStaffPassword = $StaffPassword
+
+function Get-ResolvedStaffPassword {
+    if (-not [string]::IsNullOrWhiteSpace($script:ResolvedStaffPassword)) {
+        return $script:ResolvedStaffPassword
+    }
+
+    if ($script:StaffPasswordPrompted) {
+        return $null
+    }
+
+    $script:StaffPasswordPrompted = $true
+    try {
+        $secure = Read-Host "Enter staff printer password (leave blank to skip staff-only printers)" -AsSecureString
+        $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+        try {
+            $plain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
+        }
+        finally {
+            [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+        }
+
+        if ([string]::IsNullOrWhiteSpace($plain)) {
+            return $null
+        }
+
+        $script:ResolvedStaffPassword = $plain
+        return $script:ResolvedStaffPassword
+    }
+    catch {
+        Write-Warning "Unable to prompt for staff password. Staff-only printers will be skipped."
+        return $null
+    }
+}
+
 function Get-BambuddyPrinters {
     param([string]$Path)
 
@@ -140,11 +325,35 @@ function Get-BambuddyPrinters {
     $printers = $raw | ConvertFrom-Json -ErrorAction Stop
     $result = @()
     foreach ($printer in $printers) {
+        $accessCode = $null
+        if ($printer.PSObject.Properties.Name -contains "access_code" -and -not [string]::IsNullOrWhiteSpace($printer.access_code)) {
+            $accessCode = $printer.access_code
+        } elseif ($printer.PSObject.Properties.Name -contains "encrypted_access_code" -and -not [string]::IsNullOrWhiteSpace($printer.encrypted_access_code)) {
+            $password = Get-ResolvedStaffPassword
+            if ([string]::IsNullOrWhiteSpace($password)) {
+                Write-Warning "Skipping staff printer '$($printer.name)' because no staff password was supplied."
+                continue
+            }
+
+            try {
+                $accessCode = Unprotect-AccessCode -Encoded $printer.encrypted_access_code -Password $password
+            }
+            catch {
+                Write-Warning "Skipping staff printer '$($printer.name)': $($_.Exception.Message)"
+                continue
+            }
+        }
+
+        if ([string]::IsNullOrWhiteSpace($accessCode)) {
+            Write-Warning "Skipping printer '$($printer.name)' because it does not contain a usable access code."
+            continue
+        }
+
         $p = @{
             Name = $printer.name
             Serial = $printer.serial
             Host = $printer.host
-            AccessCode = $printer.access_code
+            AccessCode = $accessCode
         }
 
         if ($printer.PSObject.Properties.Name -contains "alternate_hosts" -and $null -ne $printer.alternate_hosts) {
