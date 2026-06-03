@@ -150,15 +150,41 @@ function ConvertTo-Utf8Bytes {
     return ,$bytes
 }
 
+function ConvertTo-ByteArray {
+    param([object]$Value)
+
+    if ($null -eq $Value) {
+        return [byte[]]@()
+    }
+
+    if ($Value -is [byte[]]) {
+        return $Value
+    }
+
+    if ($Value -is [System.Collections.IEnumerable] -and -not ($Value -is [string])) {
+        $buffer = New-Object System.Collections.Generic.List[byte]
+        foreach ($item in $Value) {
+            $buffer.Add([byte]$item) | Out-Null
+        }
+
+        return $buffer.ToArray()
+    }
+
+    return [byte[]]@([byte]$Value)
+}
+
 function Invoke-HmacSha256 {
     param(
-        [byte[]]$Key,
-        [byte[]]$Data
+        [object]$Key,
+        [object]$Data
     )
 
-    $hmac = [System.Security.Cryptography.HMACSHA256]::new($Key)
+    [byte[]]$resolvedKey = ConvertTo-ByteArray -Value $Key
+    [byte[]]$resolvedData = ConvertTo-ByteArray -Value $Data
+
+    $hmac = [System.Security.Cryptography.HMACSHA256]::new($resolvedKey)
     try {
-        [byte[]]$hash = $hmac.ComputeHash($Data)
+        [byte[]]$hash = $hmac.ComputeHash($resolvedData)
         return ,$hash
     }
     finally {
@@ -169,14 +195,16 @@ function Invoke-HmacSha256 {
 function Get-Pbkdf2KeyMaterial {
     param(
         [string]$Password,
-        [byte[]]$Salt,
+        [object]$Salt,
         [int]$Iterations,
         [int]$Length
     )
 
+    [byte[]]$resolvedSalt = ConvertTo-ByteArray -Value $Salt
+
     $kdf = [System.Security.Cryptography.Rfc2898DeriveBytes]::new(
         $Password,
-        $Salt,
+        $resolvedSalt,
         $Iterations,
         [System.Security.Cryptography.HashAlgorithmName]::SHA256
     )
@@ -191,27 +219,31 @@ function Get-Pbkdf2KeyMaterial {
 
 function New-HmacStreamXor {
     param(
-        [byte[]]$Input,
-        [byte[]]$Key,
-        [byte[]]$Nonce
+        [object]$Input,
+        [object]$Key,
+        [object]$Nonce
     )
 
-    $output = New-Object byte[] $Input.Length
+    [byte[]]$resolvedInput = ConvertTo-ByteArray -Value $Input
+    [byte[]]$resolvedKey = ConvertTo-ByteArray -Value $Key
+    [byte[]]$resolvedNonce = ConvertTo-ByteArray -Value $Nonce
+
+    $output = New-Object byte[] $resolvedInput.Length
     $offset = 0
     $counter = 0
-    while ($offset -lt $Input.Length) {
+    while ($offset -lt $resolvedInput.Length) {
         $counterBytes = [BitConverter]::GetBytes([uint32]$counter)
         [Array]::Reverse($counterBytes)
 
-        $blockInput = New-Object byte[] ($Nonce.Length + 4)
-        [Array]::Copy($Nonce, 0, $blockInput, 0, $Nonce.Length)
-        [Array]::Copy($counterBytes, 0, $blockInput, $Nonce.Length, 4)
+        $blockInput = New-Object byte[] ($resolvedNonce.Length + 4)
+        [Array]::Copy($resolvedNonce, 0, $blockInput, 0, $resolvedNonce.Length)
+        [Array]::Copy($counterBytes, 0, $blockInput, $resolvedNonce.Length, 4)
 
-        $block = Invoke-HmacSha256 -Key $Key -Data $blockInput
-        $remaining = $Input.Length - $offset
+        [byte[]]$block = Invoke-HmacSha256 -Key $resolvedKey -Data $blockInput
+        $remaining = $resolvedInput.Length - $offset
         $take = [Math]::Min($remaining, $block.Length)
         for ($i = 0; $i -lt $take; $i++) {
-            $output[$offset + $i] = $Input[$offset + $i] -bxor $block[$i]
+            $output[$offset + $i] = $resolvedInput[$offset + $i] -bxor $block[$i]
         }
 
         $offset += $take
@@ -223,17 +255,20 @@ function New-HmacStreamXor {
 
 function Test-ByteArraysEqualConstantTime {
     param(
-        [byte[]]$Left,
-        [byte[]]$Right
+        [object]$Left,
+        [object]$Right
     )
 
-    if ($Left.Length -ne $Right.Length) {
+    [byte[]]$resolvedLeft = ConvertTo-ByteArray -Value $Left
+    [byte[]]$resolvedRight = ConvertTo-ByteArray -Value $Right
+
+    if ($resolvedLeft.Length -ne $resolvedRight.Length) {
         return $false
     }
 
     $diff = 0
-    for ($i = 0; $i -lt $Left.Length; $i++) {
-        $diff = $diff -bor ($Left[$i] -bxor $Right[$i])
+    for ($i = 0; $i -lt $resolvedLeft.Length; $i++) {
+        $diff = $diff -bor ($resolvedLeft[$i] -bxor $resolvedRight[$i])
     }
 
     return ($diff -eq 0)
@@ -259,12 +294,12 @@ function Unprotect-AccessCode {
         throw "Invalid KDF iteration count."
     }
 
-    [byte[]]$salt = ConvertFrom-Base64Text -Value $parts[2]
-    [byte[]]$nonce = ConvertFrom-Base64Text -Value $parts[3]
-    [byte[]]$ciphertext = ConvertFrom-Base64Text -Value $parts[4]
-    [byte[]]$expectedMac = ConvertFrom-Base64Text -Value $parts[5]
+    $salt = ConvertTo-ByteArray -Value (ConvertFrom-Base64Text -Value $parts[2])
+    $nonce = ConvertTo-ByteArray -Value (ConvertFrom-Base64Text -Value $parts[3])
+    $ciphertext = ConvertTo-ByteArray -Value (ConvertFrom-Base64Text -Value $parts[4])
+    $expectedMac = ConvertTo-ByteArray -Value (ConvertFrom-Base64Text -Value $parts[5])
 
-    [byte[]]$keyMaterial = Get-Pbkdf2KeyMaterial -Password $Password -Salt $salt -Iterations $iterations -Length 64
+    $keyMaterial = ConvertTo-ByteArray -Value (Get-Pbkdf2KeyMaterial -Password $Password -Salt $salt -Iterations $iterations -Length 64)
     $encKey = New-Object byte[] 32
     $macKey = New-Object byte[] 32
     [Array]::Copy($keyMaterial, 0, $encKey, 0, 32)
@@ -273,12 +308,12 @@ function Unprotect-AccessCode {
     $macInput = New-Object byte[] ($nonce.Length + $ciphertext.Length)
     [Array]::Copy($nonce, 0, $macInput, 0, $nonce.Length)
     [Array]::Copy($ciphertext, 0, $macInput, $nonce.Length, $ciphertext.Length)
-    [byte[]]$actualMac = Invoke-HmacSha256 -Key $macKey -Data $macInput
+    $actualMac = ConvertTo-ByteArray -Value (Invoke-HmacSha256 -Key $macKey -Data $macInput)
     if (-not (Test-ByteArraysEqualConstantTime -Left $actualMac -Right $expectedMac)) {
         throw "Wrong password or tampered encrypted access code."
     }
 
-    [byte[]]$plainBytes = New-HmacStreamXor -Input $ciphertext -Key $encKey -Nonce $nonce
+    $plainBytes = ConvertTo-ByteArray -Value (New-HmacStreamXor -Input $ciphertext -Key $encKey -Nonce $nonce)
     return [System.Text.Encoding]::UTF8.GetString($plainBytes)
 }
 
