@@ -31,39 +31,15 @@ The script will automatically download the latest certificate and printer config
 
 #### Windows
 
-> **Important:** Download the full repository as a ZIP file. The scripts need access to local files to function properly.
+**Three steps — no ZIP download needed:**
 
-**Download and Setup:**
+1. Go to `https://github.com/FirstBuild/3D-Printing` and click on **`Install-BambuddyCert.bat`**
+2. Click the **download** button (the icon with a downward arrow, near the top-right of the file view) and save the file anywhere — your Desktop works great
+3. Double-click the downloaded `Install-BambuddyCert.bat` file
 
-1. Go to `https://github.com/FirstBuild/3D-Printing`
-2. Click the green **Code** button and select **Download ZIP**
-3. Extract the ZIP file to a location like `C:\Users\YourUsername\Downloads\3D-Printing-main`
+A black Command Prompt window will open, download everything it needs from the internet, install the certificate, and configure the printers automatically. When it says **"Done!"**, press any key to close it.
 
-**Option 1: Using Batch File (Easiest)**
-
-1. Navigate to the extracted folder
-2. Double-click `Install-BambuddyCert.bat` to run it
-   - The script will automatically download the latest configuration files
-   - Command Prompt will open, run the script, and close when complete
-
-**Option 2: Using PowerShell**
-
-1. Right-click on `Install-BambuddyCert.ps1` and select **Run with PowerShell**
-   - If this option doesn't appear, use the manual method below
-2. The script will automatically download the latest configuration files
-
-**Manual PowerShell Method:**
-
-1. Open PowerShell **as Administrator**
-2. Navigate to the extracted folder:
-   ```powershell
-   cd C:\Users\YourUsername\Downloads\3D-Printing-main
-   ```
-3. Run these commands:
-   ```powershell
-   Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process
-   .\Install-BambuddyCert.ps1
-   ```
+> **Tip:** If Windows asks "Do you want to allow this app to make changes?", click **Yes**. If you see a blue SmartScreen warning, click **More info** then **Run anyway**.
 
 ---
 
