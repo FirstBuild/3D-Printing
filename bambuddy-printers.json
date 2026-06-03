@@ -20,21 +20,21 @@
   {
     "name": "Dino",
     "serial": "01P00C472400891",
-    "host": "10.206.49.138",
+    "host": "192.168.68.88",
     "staff_only": true,
     "encrypted_access_code": "enc-v1:200000:gv8SSk7rsSYin3tGngJwDw==:Z/wYsi7E1UPaJILZ7mn67A==:G8sVKN7mz3Y=:8Qgx6SpUqcGpOXcBQn/ifBtT5Ug5Hhj44q2mMF/masc="
   },
   {
     "name": "Pebbles",
     "serial": "01P00C470801489",
-    "host": "10.206.50.75",
+    "host": "192.168.68.87",
     "staff_only": true,
     "encrypted_access_code": "enc-v1:200000:spqesCODdSRGHaeLp1ooKQ==:dtJFs1XTS7nJCT/maJRCdg==:Z178fW9R90E=:n0riwXJUlaC+xakXC5YL7k0y4nfClyK4CIym0VqEXjQ="
   },
   {
     "name": "BamBam",
     "serial": "01P09C471900468",
-    "host": "10.206.49.151",
+    "host": "192.168.68.89",
     "staff_only": true,
     "encrypted_access_code": "enc-v1:200000:MY2q9ThiH3r+8keTym752w==:kIhawH9Kq7jpMbdowJtklA==:IdjSmSvu5yI=:+qbMEwDibWnMB5k8kxD45rMAbcsaaCVEexZJLjVSf5M="
   },
