@@ -68,7 +68,7 @@ If no password is entered, staff-only printers are skipped and public printers a
 ### Easy update workflow for staff codes
 
 1. In `bambuddy-printers.json`, set `staff_only: true` on staff printers.
-Once the script has been run, re-open Bambu Studio and make sure you're connected to the `Firstbuild_private` WiFi network. The printers should automatically show up in Bambu Studio after a few minutes.
+2. Update each staff printer's plain `access_code` to the new value.
 3. Run:
 
 ```bash

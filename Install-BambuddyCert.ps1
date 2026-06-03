@@ -133,7 +133,8 @@ function ConvertFrom-ConfigJson {
 function ConvertFrom-Base64Text {
     param([string]$Value)
 
-    return [Convert]::FromBase64String($Value)
+    [byte[]]$bytes = [Convert]::FromBase64String($Value)
+    return ,$bytes
 }
 
 function ConvertTo-Base64Text {
@@ -145,7 +146,8 @@ function ConvertTo-Base64Text {
 function ConvertTo-Utf8Bytes {
     param([string]$Value)
 
-    return [System.Text.Encoding]::UTF8.GetBytes($Value)
+    [byte[]]$bytes = [System.Text.Encoding]::UTF8.GetBytes($Value)
+    return ,$bytes
 }
 
 function Invoke-HmacSha256 {
@@ -156,7 +158,8 @@ function Invoke-HmacSha256 {
 
     $hmac = [System.Security.Cryptography.HMACSHA256]::new($Key)
     try {
-        return $hmac.ComputeHash($Data)
+        [byte[]]$hash = $hmac.ComputeHash($Data)
+        return ,$hash
     }
     finally {
         $hmac.Dispose()
@@ -178,7 +181,8 @@ function Get-Pbkdf2KeyMaterial {
         [System.Security.Cryptography.HashAlgorithmName]::SHA256
     )
     try {
-        return $kdf.GetBytes($Length)
+        [byte[]]$bytes = $kdf.GetBytes($Length)
+        return ,$bytes
     }
     finally {
         $kdf.Dispose()
@@ -214,7 +218,7 @@ function New-HmacStreamXor {
         $counter += 1
     }
 
-    return $output
+    return ,$output
 }
 
 function Test-ByteArraysEqualConstantTime {
@@ -255,12 +259,12 @@ function Unprotect-AccessCode {
         throw "Invalid KDF iteration count."
     }
 
-    $salt = ConvertFrom-Base64Text -Value $parts[2]
-    $nonce = ConvertFrom-Base64Text -Value $parts[3]
-    $ciphertext = ConvertFrom-Base64Text -Value $parts[4]
-    $expectedMac = ConvertFrom-Base64Text -Value $parts[5]
+    [byte[]]$salt = ConvertFrom-Base64Text -Value $parts[2]
+    [byte[]]$nonce = ConvertFrom-Base64Text -Value $parts[3]
+    [byte[]]$ciphertext = ConvertFrom-Base64Text -Value $parts[4]
+    [byte[]]$expectedMac = ConvertFrom-Base64Text -Value $parts[5]
 
-    $keyMaterial = Get-Pbkdf2KeyMaterial -Password $Password -Salt $salt -Iterations $iterations -Length 64
+    [byte[]]$keyMaterial = Get-Pbkdf2KeyMaterial -Password $Password -Salt $salt -Iterations $iterations -Length 64
     $encKey = New-Object byte[] 32
     $macKey = New-Object byte[] 32
     [Array]::Copy($keyMaterial, 0, $encKey, 0, 32)
@@ -269,12 +273,12 @@ function Unprotect-AccessCode {
     $macInput = New-Object byte[] ($nonce.Length + $ciphertext.Length)
     [Array]::Copy($nonce, 0, $macInput, 0, $nonce.Length)
     [Array]::Copy($ciphertext, 0, $macInput, $nonce.Length, $ciphertext.Length)
-    $actualMac = Invoke-HmacSha256 -Key $macKey -Data $macInput
+    [byte[]]$actualMac = Invoke-HmacSha256 -Key $macKey -Data $macInput
     if (-not (Test-ByteArraysEqualConstantTime -Left $actualMac -Right $expectedMac)) {
         throw "Wrong password or tampered encrypted access code."
     }
 
-    $plainBytes = New-HmacStreamXor -Input $ciphertext -Key $encKey -Nonce $nonce
+    [byte[]]$plainBytes = New-HmacStreamXor -Input $ciphertext -Key $encKey -Nonce $nonce
     return [System.Text.Encoding]::UTF8.GetString($plainBytes)
 }
 
