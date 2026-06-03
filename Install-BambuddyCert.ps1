@@ -154,11 +154,11 @@ function ConvertTo-ByteArray {
     param([object]$Value)
 
     if ($null -eq $Value) {
-        return [byte[]]@()
+        return ,([byte[]]@())
     }
 
     if ($Value -is [byte[]]) {
-        return $Value
+        return ,$Value
     }
 
     if ($Value -is [System.Collections.IEnumerator]) {
@@ -170,7 +170,7 @@ function ConvertTo-ByteArray {
             }
         }
 
-        return $buffer.ToArray()
+        return ,($buffer.ToArray())
     }
 
     if ($Value -is [System.Collections.IEnumerable] -and -not ($Value -is [string])) {
@@ -182,10 +182,10 @@ function ConvertTo-ByteArray {
             }
         }
 
-        return $buffer.ToArray()
+        return ,($buffer.ToArray())
     }
 
-    return [byte[]]@([byte]$Value)
+    return ,([byte[]]@([byte]$Value))
 }
 
 function Invoke-HmacSha256 {
