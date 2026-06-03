@@ -161,10 +161,25 @@ function ConvertTo-ByteArray {
         return $Value
     }
 
+    if ($Value -is [System.Collections.IEnumerator]) {
+        $buffer = New-Object System.Collections.Generic.List[byte]
+        while ($Value.MoveNext()) {
+            [byte[]]$chunk = ConvertTo-ByteArray -Value $Value.Current
+            foreach ($entry in $chunk) {
+                $buffer.Add($entry) | Out-Null
+            }
+        }
+
+        return $buffer.ToArray()
+    }
+
     if ($Value -is [System.Collections.IEnumerable] -and -not ($Value -is [string])) {
         $buffer = New-Object System.Collections.Generic.List[byte]
         foreach ($item in $Value) {
-            $buffer.Add([byte]$item) | Out-Null
+            [byte[]]$chunk = ConvertTo-ByteArray -Value $item
+            foreach ($entry in $chunk) {
+                $buffer.Add($entry) | Out-Null
+            }
         }
 
         return $buffer.ToArray()
