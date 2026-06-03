@@ -309,12 +309,24 @@ function Unprotect-AccessCode {
         throw "Invalid KDF iteration count."
     }
 
-    $salt = ConvertTo-ByteArray -Value (ConvertFrom-Base64Text -Value $parts[2])
-    $nonce = ConvertTo-ByteArray -Value (ConvertFrom-Base64Text -Value $parts[3])
-    $ciphertext = ConvertTo-ByteArray -Value (ConvertFrom-Base64Text -Value $parts[4])
-    $expectedMac = ConvertTo-ByteArray -Value (ConvertFrom-Base64Text -Value $parts[5])
+    [byte[]]$salt = [Convert]::FromBase64String($parts[2])
+    [byte[]]$nonce = [Convert]::FromBase64String($parts[3])
+    [byte[]]$ciphertext = [Convert]::FromBase64String($parts[4])
+    [byte[]]$expectedMac = [Convert]::FromBase64String($parts[5])
 
-    $keyMaterial = ConvertTo-ByteArray -Value (Get-Pbkdf2KeyMaterial -Password $Password -Salt $salt -Iterations $iterations -Length 64)
+    $kdf = [System.Security.Cryptography.Rfc2898DeriveBytes]::new(
+        $Password,
+        $salt,
+        $iterations,
+        [System.Security.Cryptography.HashAlgorithmName]::SHA256
+    )
+    try {
+        [byte[]]$keyMaterial = $kdf.GetBytes(64)
+    }
+    finally {
+        $kdf.Dispose()
+    }
+
     $encKey = New-Object byte[] 32
     $macKey = New-Object byte[] 32
     [Array]::Copy($keyMaterial, 0, $encKey, 0, 32)
@@ -323,12 +335,48 @@ function Unprotect-AccessCode {
     $macInput = New-Object byte[] ($nonce.Length + $ciphertext.Length)
     [Array]::Copy($nonce, 0, $macInput, 0, $nonce.Length)
     [Array]::Copy($ciphertext, 0, $macInput, $nonce.Length, $ciphertext.Length)
-    $actualMac = ConvertTo-ByteArray -Value (Invoke-HmacSha256 -Key $macKey -Data $macInput)
+
+    $macHmac = [System.Security.Cryptography.HMACSHA256]::new($macKey)
+    try {
+        [byte[]]$actualMac = $macHmac.ComputeHash($macInput)
+    }
+    finally {
+        $macHmac.Dispose()
+    }
+
     if (-not (Test-ByteArraysEqualConstantTime -Left $actualMac -Right $expectedMac)) {
         throw "Wrong password or tampered encrypted access code."
     }
 
-    $plainBytes = ConvertTo-ByteArray -Value (New-HmacStreamXor -Input $ciphertext -Key $encKey -Nonce $nonce)
+    [byte[]]$plainBytes = New-Object byte[] $ciphertext.Length
+    $offset = 0
+    $counter = 0
+    while ($offset -lt $ciphertext.Length) {
+        [byte[]]$counterBytes = [BitConverter]::GetBytes([uint32]$counter)
+        [Array]::Reverse($counterBytes)
+
+        [byte[]]$blockInput = New-Object byte[] ($nonce.Length + 4)
+        [Array]::Copy($nonce, 0, $blockInput, 0, $nonce.Length)
+        [Array]::Copy($counterBytes, 0, $blockInput, $nonce.Length, 4)
+
+        $encHmac = [System.Security.Cryptography.HMACSHA256]::new($encKey)
+        try {
+            [byte[]]$block = $encHmac.ComputeHash($blockInput)
+        }
+        finally {
+            $encHmac.Dispose()
+        }
+
+        $remaining = $ciphertext.Length - $offset
+        $take = [Math]::Min($remaining, $block.Length)
+        for ($i = 0; $i -lt $take; $i++) {
+            $plainBytes[$offset + $i] = $ciphertext[$offset + $i] -bxor $block[$i]
+        }
+
+        $offset += $take
+        $counter += 1
+    }
+
     return [System.Text.Encoding]::UTF8.GetString($plainBytes)
 }
 
