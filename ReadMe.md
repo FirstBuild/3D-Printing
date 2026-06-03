@@ -17,7 +17,7 @@ Run this command in Terminal:
 curl -fsSL https://raw.githubusercontent.com/FirstBuild/3D-Printing/main/Install-Bambuddy-Cert-MacOS.sh | bash
 ```
 
-The script will automatically download the latest certificate and printer configuration files from GitHub.
+The script will automatically download the latest printer configuration file from GitHub.
 
 #### Linux
 
@@ -27,7 +27,7 @@ Run this command in your terminal:
 curl -fsSL https://raw.githubusercontent.com/FirstBuild/3D-Printing/main/Install-Bambuddy-Cert-Linux.sh | bash
 ```
 
-The script will automatically download the latest certificate and printer configuration files from GitHub.
+The script will automatically download the latest printer configuration file from GitHub.
 
 #### Windows
 
@@ -68,7 +68,7 @@ If no password is entered, staff-only printers are skipped and public printers a
 ### Easy update workflow for staff codes
 
 1. In `bambuddy-printers.json`, set `staff_only: true` on staff printers.
-2. Update each staff printer's plain `access_code` to the new value.
+Once the script has been run, re-open Bambu Studio and make sure you're connected to the `Firstbuild_private` WiFi network. The printers should automatically show up in Bambu Studio after a few minutes.
 3. Run:
 
 ```bash

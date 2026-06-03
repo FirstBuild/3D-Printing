@@ -5,7 +5,19 @@ CERT_FILE=""
 APPIMAGE_ROOT=""
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PRINTERS_FILE="$SCRIPT_DIR/bambuddy-printers.json"
-[[ -f "$PRINTERS_FILE" ]] || { echo "Printer definition file not found: $PRINTERS_FILE"; exit 1; }
+GITHUB_REPO="FirstBuild/3D-Printing"
+GITHUB_BRANCH="main"
+
+echo "Downloading latest files from GitHub..."
+if curl -fsSL -o "$PRINTERS_FILE" "https://raw.githubusercontent.com/$GITHUB_REPO/$GITHUB_BRANCH/bambuddy-printers.json"; then
+  echo "Successfully downloaded bambuddy-printers.json"
+elif [[ ! -f "$PRINTERS_FILE" ]]; then
+  echo "Error: No local printers file and download failed"
+  exit 1
+else
+  echo "Warning: Failed to download bambuddy-printers.json from GitHub; using local copy."
+fi
+
 BAMBUDDY_PRINTERS_JSON="$(cat "$PRINTERS_FILE")"
 EMBEDDED_CERT_TEXT="$(cat <<'EOF'
 -----BEGIN CERTIFICATE-----
@@ -345,6 +357,8 @@ def load_config(path):
     text = path.read_text()
     if not text.strip():
         return {}
+    # Some slicer config files append metadata lines like '# MD5: ...' after the JSON body.
+    text = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
     return json.loads(text)
 
 def patch_config(path):

@@ -9,10 +9,7 @@ GITHUB_BRANCH="main"
 
 # Function to download the latest files from GitHub
 download_latest_files() {
-  local temp_dir
-  temp_dir=$(mktemp -d)
-  trap "rm -rf '$temp_dir'" EXIT
-  
+  # No temporary directory needed here; download directly to PRINTERS_FILE.
   echo "Downloading latest files from GitHub..."
   
   # Download bambuddy-printers.json
@@ -335,6 +332,8 @@ def load_config(path):
     text = path.read_text()
     if not text.strip():
         return {}
+    # Some slicer config files append metadata lines like '# MD5: ...' after the JSON body.
+    text = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
     return json.loads(text)
 
 def patch_config(path):

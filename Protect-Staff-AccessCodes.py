@@ -110,7 +110,7 @@ def main() -> None:
     parser.add_argument(
         "--password",
         default="",
-        help="Staff encryption password (omit to be prompted securely)",
+        help="Staff encryption password (insecure on shared systems; omit to be prompted securely)",
     )
     parser.add_argument(
         "--rotate-all",
