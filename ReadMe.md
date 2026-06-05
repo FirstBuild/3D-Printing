@@ -1,9 +1,9 @@
 # 3D Printing @ FirstBuild
-The purpose of this repository is to store information about using 3D printing resources in the Louisville, KY FirstBuild Makerspace.
+The purpose of this repository is to store information about using 3D printing resources in the Louisville, KY FirstBuild Makerspace. The scripts below will automatically setup the FirstBuild printers on your machine running Bambu Studio or Orca Slicer (untested). 
 
-## Installing Bambu Certificate
+## Installing Bambu Printers
 
-These scripts install the certificate required to connect to the Bambu Lab printers in the FirstBuild makerspace.
+These scripts install the certificate and printer definitions required to connect to the Bambu Lab printers in the FirstBuild makerspace.
 
 ### Quick Install
 
@@ -33,7 +33,7 @@ The script will automatically download the latest printer configuration file fro
 
 **Three steps — no ZIP download needed:**
 
-1. Go to `https://github.com/FirstBuild/3D-Printing` and click on **`Install-BambuddyCert.bat`**
+1. Go to `https://github.com/FirstBuild/3D-Printing` and right-click on **`Install-BambuddyCert.bat`** and click `Run as Administrator`
 2. Click the **download** button (the icon with a downward arrow, near the top-right of the file view) and save the file anywhere — your Desktop works great
 3. Double-click the downloaded `Install-BambuddyCert.bat` file
 
