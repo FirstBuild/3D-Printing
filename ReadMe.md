@@ -33,7 +33,7 @@ The script will automatically download the latest printer configuration file fro
 
 **Three steps — no ZIP download needed:**
 
-1. Go to `https://github.com/FirstBuild/3D-Printing` and right-click on **`Install-BambuddyCert.bat`** and click `Run as Administrator`
+1. Go to `https://github.com/FirstBuild/3D-Printing` and click on **`Install-BambuddyCert.bat`**
 2. Click the **download** button (the icon with a downward arrow, near the top-right of the file view) and save the file anywhere — your Desktop works great
 3. Double-click the downloaded `Install-BambuddyCert.bat` file
 
