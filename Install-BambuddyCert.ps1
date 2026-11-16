@@ -451,10 +451,15 @@ function Get-BambuddyPrinters {
             continue
         }
 
+        $hostValue = $null
+        if ($printer.PSObject.Properties.Name -contains "host" -and -not [string]::IsNullOrWhiteSpace($printer.host)) {
+            $hostValue = $printer.host
+        }
+
         $p = @{
             Name = $printer.name
             Serial = $printer.serial
-            Host = $printer.host
+            Host = $hostValue
             AccessCode = $accessCode
         }
 
@@ -604,18 +609,258 @@ function Test-IPv4Address {
     return $true
 }
 
-function Get-PrinterConnectHost {
-    param([hashtable]$Printer)
+function Resolve-HostToIPv4 {
+    param([string]$HostName)
 
-    if (Test-IPv4Address -Value $Printer.Host) {
+    if ([string]::IsNullOrWhiteSpace($HostName)) {
+        return $null
+    }
+
+    if (Test-IPv4Address -Value $HostName) {
+        return $HostName
+    }
+
+    try {
+        $addresses = [System.Net.Dns]::GetHostAddresses($HostName)
+        foreach ($addr in $addresses) {
+            if ($addr.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetwork) {
+                return $addr.IPAddressToString
+            }
+        }
+    }
+    catch {
+        # Ignore DNS/mDNS resolution failures
+    }
+
+    return $null
+}
+
+function Get-LocalIPv4Subnets {
+    $prefixes = New-Object System.Collections.Generic.HashSet[string]
+    try {
+        $nics = [System.Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces()
+        foreach ($nic in $nics) {
+            if ($nic.OperationalStatus -ne [System.Net.NetworkInformation.OperationalStatus]::Up) {
+                continue
+            }
+            if ($nic.NetworkInterfaceType -eq [System.Net.NetworkInformation.NetworkInterfaceType]::Loopback) {
+                continue
+            }
+
+            $ipProps = $nic.GetIPProperties()
+            foreach ($uni in $ipProps.UnicastAddresses) {
+                if ($uni.Address.AddressFamily -ne [System.Net.Sockets.AddressFamily]::InterNetwork) {
+                    continue
+                }
+
+                $ipStr = $uni.Address.IPAddressToString
+                if ($ipStr.StartsWith("127.") -or $ipStr.StartsWith("169.254.")) {
+                    continue
+                }
+
+                $octets = $ipStr -split '\.'
+                if ($octets.Count -eq 4) {
+                    [void]$prefixes.Add("$($octets[0]).$($octets[1]).$($octets[2])")
+                }
+            }
+        }
+    }
+    catch {
+        # Ignore interface enumeration errors
+    }
+
+    return @($prefixes)
+}
+
+function Discover-BambuPrinters {
+    param([string[]]$Serials)
+
+    $discovered = @{}
+    $targetSet = New-Object System.Collections.Generic.HashSet[string]
+    foreach ($s in $Serials) {
+        if (-not [string]::IsNullOrWhiteSpace($s)) {
+            [void]$targetSet.Add($s)
+        }
+    }
+
+    if ($targetSet.Count -eq 0) {
+        return $discovered
+    }
+
+    Write-Host "Discovering printers on the local network..."
+
+    # 1. Try passive Bambu SSDP discovery on UDP port 2021
+    $udp = $null
+    try {
+        $udp = New-Object System.Net.Sockets.UdpClient
+        $udp.Client.SetSocketOption([System.Net.Sockets.SocketOptionLevel]::Socket, [System.Net.Sockets.SocketOptionName]::ReuseAddress, $true)
+        $udp.Client.Bind([System.Net.IPEndPoint]::new([System.Net.IPAddress]::Any, 2021))
+        $udp.Client.ReceiveTimeout = 250
+        try {
+            $udp.JoinMulticastGroup([System.Net.IPAddress]::Parse("239.255.255.250"))
+        }
+        catch {
+            # Multicast join may fail on some interfaces; broadcast packets can still arrive
+        }
+
+        $deadline = [DateTime]::UtcNow.AddSeconds(2.5)
+        while ([DateTime]::UtcNow -lt $deadline -and $discovered.Count -lt $targetSet.Count) {
+            try {
+                $remoteEp = New-Object System.Net.IPEndPoint([System.Net.IPAddress]::Any, 0)
+                $bytes = $udp.Receive([ref]$remoteEp)
+                $text = [System.Text.Encoding]::UTF8.GetString($bytes)
+
+                $usn = $null
+                $loc = $null
+                if ($text -match '(?im)^USN:\s*([^\r\n]+)') {
+                    $usn = $matches[1].Trim()
+                }
+                if ($text -match '(?im)^Location:\s*([^\r\n]+)') {
+                    $loc = $matches[1].Trim()
+                }
+
+                if ($usn -and $targetSet.Contains($usn) -and -not $discovered.ContainsKey($usn)) {
+                    $ipCandidate = $null
+                    if ($loc -and (Test-IPv4Address -Value $loc)) {
+                        $ipCandidate = $loc
+                    } elseif ($loc -match '(\d{1,3}(?:\.\d{1,3}){3})') {
+                        $ipCandidate = $matches[1]
+                    } elseif ($remoteEp.Address) {
+                        $ipCandidate = $remoteEp.Address.IPAddressToString
+                    }
+
+                    if ($ipCandidate -and (Test-IPv4Address -Value $ipCandidate)) {
+                        $discovered[$usn] = $ipCandidate
+                        Write-Host "  Discovered (SSDP): $usn -> $ipCandidate"
+                    }
+                }
+            }
+            catch [System.Net.Sockets.SocketException] {
+                # ReceiveTimeout elapsed; continue until deadline
+            }
+        }
+    }
+    catch {
+        # Port 2021 may already be in use by Bambu Studio; fall through to active scan
+    }
+    finally {
+        if ($null -ne $udp) {
+            $udp.Close()
+        }
+    }
+
+    # 2. Active subnet scan on TCP port 8883 + TLS cert CN check for remaining printers
+    $remaining = @($targetSet | Where-Object { -not $discovered.ContainsKey($_) })
+    if ($remaining.Count -gt 0) {
+        $prefixes = Get-LocalIPv4Subnets
+        foreach ($prefix in $prefixes) {
+            if ($discovered.Count -ge $targetSet.Count) {
+                break
+            }
+
+            $probes = @()
+            $tasks = New-Object System.Collections.Generic.List[System.Threading.Tasks.Task]
+            for ($i = 1; $i -le 254; $i++) {
+                $ip = "$prefix.$i"
+                $client = New-Object System.Net.Sockets.TcpClient
+                try {
+                    $task = $client.ConnectAsync($ip, 8883)
+                    $tasks.Add($task) | Out-Null
+                    $probes += [pscustomobject]@{
+                        Ip = $ip
+                        Client = $client
+                        Task = $task
+                    }
+                }
+                catch {
+                    $client.Dispose()
+                }
+            }
+
+            try {
+                [void][System.Threading.Tasks.Task]::WaitAll($tasks.ToArray(), 500)
+            }
+            catch {
+                # Ignore individual connection failures
+            }
+
+            foreach ($probe in $probes) {
+                try {
+                    if ($probe.Client.Connected -and $discovered.Count -lt $targetSet.Count) {
+                        $ssl = $null
+                        try {
+                            $ssl = New-Object System.Net.Security.SslStream($probe.Client.GetStream(), $false, { $true })
+                            $ssl.ReadTimeout = 1000
+                            $ssl.WriteTimeout = 1000
+                            $ssl.AuthenticateAsClient($probe.Ip)
+                            if ($null -ne $ssl.RemoteCertificate) {
+                                $cert = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($ssl.RemoteCertificate)
+                                $subject = $cert.Subject
+                                $cn = $cert.GetNameInfo([System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false)
+                                foreach ($serial in $remaining) {
+                                    if (-not $discovered.ContainsKey($serial) -and ($cn -eq $serial -or $subject -like "*$serial*")) {
+                                        $discovered[$serial] = $probe.Ip
+                                        Write-Host "  Discovered (TLS 8883): $serial -> $($probe.Ip)"
+                                    }
+                                }
+                            }
+                        }
+                        catch {
+                            # Not a Bambu TLS endpoint or handshake failed
+                        }
+                        finally {
+                            if ($null -ne $ssl) {
+                                $ssl.Dispose()
+                            }
+                        }
+                    }
+                }
+                finally {
+                    $probe.Client.Dispose()
+                }
+            }
+        }
+    }
+
+    return $discovered
+}
+
+function Get-PrinterConnectHost {
+    param(
+        [hashtable]$Printer,
+        [hashtable]$DiscoveredHosts
+    )
+
+    if ($null -ne $DiscoveredHosts -and $DiscoveredHosts.ContainsKey($Printer.Serial)) {
+        return $DiscoveredHosts[$Printer.Serial]
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($Printer.Host)) {
+        $resolved = Resolve-HostToIPv4 -HostName $Printer.Host
+        if ($resolved) {
+            return $resolved
+        }
         return $Printer.Host
     }
 
     if ($Printer.ContainsKey("AlternateHosts") -and $Printer.AlternateHosts.Count -gt 0) {
+        foreach ($alt in $Printer.AlternateHosts) {
+            if (-not (Test-IPv4Address -Value $alt)) {
+                $resolved = Resolve-HostToIPv4 -HostName $alt
+                if ($resolved) {
+                    return $resolved
+                }
+            }
+        }
+        foreach ($alt in $Printer.AlternateHosts) {
+            if (Test-IPv4Address -Value $alt) {
+                return $alt
+            }
+        }
         return $Printer.AlternateHosts[0]
     }
 
-    return $Printer.Host
+    return $null
 }
 
 function Get-SlicerUuid {
@@ -661,6 +906,8 @@ function Configure-Printers {
         }
     )
 
+    $discoveredHosts = Discover-BambuPrinters -Serials @($BambuddyPrinters | ForEach-Object { $_.Serial })
+
     foreach ($configEntry in $configs) {
         $configPath = $configEntry.Path
         $configExists = Test-Path $configPath
@@ -702,11 +949,15 @@ function Configure-Printers {
         $slicerUuid = Get-SlicerUuid -Config $config
 
         foreach ($printer in $BambuddyPrinters) {
-            $connectHost = Get-PrinterConnectHost -Printer $printer
+            $connectHost = Get-PrinterConnectHost -Printer $printer -DiscoveredHosts $discoveredHosts
             Set-ConfigMapValue -Config $config -MapName "access_code" -Serial $printer.Serial -Value $printer.AccessCode
             Set-ConfigMapValue -Config $config -MapName "user_access_code" -Serial $printer.Serial -Value $printer.AccessCode
-            Set-ConfigMapValue -Config $config -MapName "ip_address" -Serial $printer.Serial -Value $connectHost
-            Set-ConfigMapValue -Config $config -MapName "user_access_dev_ip" -Serial $printer.Serial -Value (ConvertTo-BambuEncodedDevIp -HostName $connectHost -SlicerUuid $slicerUuid)
+            if (-not [string]::IsNullOrWhiteSpace($connectHost)) {
+                Set-ConfigMapValue -Config $config -MapName "ip_address" -Serial $printer.Serial -Value $connectHost
+                Set-ConfigMapValue -Config $config -MapName "user_access_dev_ip" -Serial $printer.Serial -Value (ConvertTo-BambuEncodedDevIp -HostName $connectHost -SlicerUuid $slicerUuid)
+            } else {
+                Write-Warning "Could not discover IP for '$($printer.Name)' ($($printer.Serial)). Skipping IP configuration for this printer."
+            }
         }
 
         Write-JsonFile -Path $configPath -Value $config

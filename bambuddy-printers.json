@@ -2,50 +2,43 @@
   {
     "name": "Barney",
     "serial": "01P09C470802210",
-    "host": "192.168.68.60",
-    "access_code": "02b198a4"
+    "access_code": "ccdc988b"
   },
   {
     "name": "Betty",
     "serial": "01P09C471501115",
-    "host": "192.168.68.63",
     "access_code": "b61e6e7c"
   },
   {
     "name": "Wilma",
     "serial": "01P09C471501121",
-    "host": "192.168.68.62",
     "access_code": "f99827ae"
   },
   {
     "name": "Dino",
     "serial": "01P00C472400891",
-    "host": "192.168.68.88",
     "staff_only": true,
-    "encrypted_access_code": "enc-v1:200000:gv8SSk7rsSYin3tGngJwDw==:Z/wYsi7E1UPaJILZ7mn67A==:G8sVKN7mz3Y=:8Qgx6SpUqcGpOXcBQn/ifBtT5Ug5Hhj44q2mMF/masc="
+    "encrypted_access_code": "enc-v1:200000:+lkTeJDqXLn/LbVq2Al7Pw==:fvz0OGRAqyoND2x/O7nUZA==:/60GR2YCGeA=:CQnYkKddEcxjd/HVQgBm5gjvrfDRIhXtnr6hzSabrkk="
   },
   {
     "name": "Pebbles",
     "serial": "01P00C470801489",
-    "host": "192.168.68.87",
     "staff_only": true,
-    "encrypted_access_code": "enc-v1:200000:spqesCODdSRGHaeLp1ooKQ==:dtJFs1XTS7nJCT/maJRCdg==:Z178fW9R90E=:n0riwXJUlaC+xakXC5YL7k0y4nfClyK4CIym0VqEXjQ="
+    "encrypted_access_code": "enc-v1:200000:yaw+dr6/QT5EtXgl7GrbiA==:LY8395O2qVrnIxDuKBrHUQ==:8OAObAGODIo=:vrfdq8qLexuj4rBoh3oISB0Xvj5QZbXS0ZWufuJLu2U="
   },
   {
     "name": "BamBam",
     "serial": "01P09C471900468",
-    "host": "192.168.68.89",
     "staff_only": true,
-    "encrypted_access_code": "enc-v1:200000:MY2q9ThiH3r+8keTym752w==:kIhawH9Kq7jpMbdowJtklA==:IdjSmSvu5yI=:+qbMEwDibWnMB5k8kxD45rMAbcsaaCVEexZJLjVSf5M="
+    "encrypted_access_code": "enc-v1:200000:J3Li+/pFI82SPinS4pj/vQ==:2ZmNvgtRzry/9c0bEntOVQ==:hPtEMaGrEsQ=:KWFyxd3wo4rF6QCiDFIYfT5t3mczOW4dFuQW50CKsJM="
   },
   {
     "name": "Engineering Printers (Virtual)",
     "serial": "01P00A391800001",
-    "host": "192.168.68.81",
     "access_code": "12345678",
     "alternate_hosts": [
-      "10.206.50.172",
-      "bambuddy.local"
+      "bambuddy.local",
+      "10.206.50.172"
     ]
   }
 ]

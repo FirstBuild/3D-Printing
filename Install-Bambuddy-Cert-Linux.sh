@@ -164,6 +164,7 @@ install_direct() {
 configure_printers() {
   BAMBUDDY_PRINTERS_JSON="$BAMBUDDY_PRINTERS_JSON" BAMBUDDY_APPIMAGE_ROOT="$APPIMAGE_ROOT" python3 - <<'PY'
 import base64
+import concurrent.futures
 import datetime
 import getpass
 import hashlib
@@ -172,7 +173,13 @@ import json
 import os
 import pathlib
 import pwd
+import re
 import shutil
+import socket
+import ssl
+import struct
+import subprocess
+import time
 import uuid
 
 raw_printers = json.loads(os.environ["BAMBUDDY_PRINTERS_JSON"])
@@ -330,12 +337,153 @@ def encode_dev_ip(host, slicer_uuid):
     rng = Mt19937(seed)
     return bytes((b ^ (rng.rand() & 0xFF)) for b in host.encode("utf-8")).hex()
 
-def get_connect_host(printer):
-    host = printer["host"]
-    if all(part.isdigit() and 0 <= int(part) <= 255 for part in host.split(".")) and host.count(".") == 3:
-        return host
+def is_ipv4(value):
+    if not value:
+        return False
+    parts = value.split(".")
+    return len(parts) == 4 and all(p.isdigit() and 0 <= int(p) <= 255 for p in parts)
+
+def resolve_host_to_ipv4(hostname):
+    if not hostname:
+        return None
+    if is_ipv4(hostname):
+        return hostname
+    try:
+        ip = socket.gethostbyname(hostname)
+        if is_ipv4(ip):
+            return ip
+    except OSError:
+        pass
+    return None
+
+def get_local_ipv4_subnets():
+    prefixes = set()
+    for target in ("192.168.68.1", "8.8.8.8"):
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                s.connect((target, 80))
+                ip = s.getsockname()[0]
+                if is_ipv4(ip) and not ip.startswith(("127.", "169.254.")):
+                    prefixes.add(".".join(ip.split(".")[:3]))
+        except OSError:
+            pass
+    for cmd in (["ifconfig"], ["ip", "-4", "addr"]):
+        try:
+            out = subprocess.check_output(cmd, stderr=subprocess.DEVNULL, text=True)
+            for match in re.findall(r"\binet\s+(\d+\.\d+\.\d+\.\d+)", out):
+                if is_ipv4(match) and not match.startswith(("127.", "169.254.")):
+                    prefixes.add(".".join(match.split(".")[:3]))
+        except (OSError, subprocess.SubprocessError):
+            pass
+    return sorted(prefixes)
+
+def probe_tls_serial(ip, target_serials):
+    try:
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        with socket.create_connection((ip, 8883), timeout=0.45) as sock:
+            with ctx.wrap_socket(sock, server_hostname=ip) as ssock:
+                der = ssock.getpeercert(binary_form=True)
+                if not der:
+                    return None
+                for serial in target_serials:
+                    if serial.encode("ascii") in der:
+                        return (serial, ip)
+    except OSError:
+        pass
+    return None
+
+def discover_printers(serials):
+    discovered = {}
+    target_set = {s for s in serials if s}
+    if not target_set:
+        return discovered
+
+    print("Discovering printers on the local network...")
+
+    # 1. Passive Bambu SSDP discovery on UDP port 2021
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP) as udp:
+            udp.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            if hasattr(socket, "SO_REUSEPORT"):
+                try:
+                    udp.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+                except OSError:
+                    pass
+            udp.bind(("", 2021))
+            udp.settimeout(0.25)
+            try:
+                mreq = struct.pack("4sl", socket.inet_aton("239.255.255.250"), socket.INADDR_ANY)
+                udp.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+            except OSError:
+                pass
+
+            deadline = time.monotonic() + 2.5
+            while time.monotonic() < deadline and len(discovered) < len(target_set):
+                try:
+                    data, addr = udp.recvfrom(4096)
+                except socket.timeout:
+                    continue
+                text = data.decode("utf-8", errors="ignore")
+                usn_match = re.search(r"(?im)^USN:\s*([^\r\n]+)", text)
+                loc_match = re.search(r"(?im)^Location:\s*([^\r\n]+)", text)
+                usn = usn_match.group(1).strip() if usn_match else None
+                loc = loc_match.group(1).strip() if loc_match else None
+                if usn in target_set and usn not in discovered:
+                    ip_candidate = None
+                    if loc and is_ipv4(loc):
+                        ip_candidate = loc
+                    elif loc:
+                        m = re.search(r"(\d{1,3}(?:\.\d{1,3}){3})", loc)
+                        if m and is_ipv4(m.group(1)):
+                            ip_candidate = m.group(1)
+                    if not ip_candidate and addr and is_ipv4(addr[0]):
+                        ip_candidate = addr[0]
+                    if ip_candidate:
+                        discovered[usn] = ip_candidate
+                        print(f"  Discovered (SSDP): {usn} -> {ip_candidate}")
+    except OSError:
+        pass
+
+    # 2. Active subnet scan on TCP port 8883 + TLS cert check for remaining printers
+    remaining = target_set - set(discovered.keys())
+    if remaining:
+        subnets = get_local_ipv4_subnets()
+        candidates = [f"{prefix}.{i}" for prefix in subnets for i in range(1, 255)]
+        if candidates:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=64) as executor:
+                futures = [executor.submit(probe_tls_serial, ip, remaining) for ip in candidates]
+                for fut in concurrent.futures.as_completed(futures):
+                    res = fut.result()
+                    if res:
+                        serial, ip = res
+                        if serial not in discovered:
+                            discovered[serial] = ip
+                            print(f"  Discovered (TLS 8883): {serial} -> {ip}")
+
+    return discovered
+
+def get_connect_host(printer, discovered_hosts):
+    serial = printer.get("serial")
+    if serial and serial in discovered_hosts:
+        return discovered_hosts[serial]
+
+    host = (printer.get("host") or "").strip()
+    if host:
+        resolved = resolve_host_to_ipv4(host)
+        return resolved if resolved else host
+
     alternate_hosts = printer.get("alternate_hosts") or []
-    return alternate_hosts[0] if alternate_hosts else host
+    for alt in alternate_hosts:
+        if not is_ipv4(alt):
+            resolved = resolve_host_to_ipv4(alt)
+            if resolved:
+                return resolved
+    for alt in alternate_hosts:
+        if is_ipv4(alt):
+            return alt
+    return alternate_hosts[0] if alternate_hosts else None
 
 def ensure_slicer_uuid(config):
     app_config = config.get("app")
@@ -361,7 +509,7 @@ def load_config(path):
     text = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
     return json.loads(text)
 
-def patch_config(path):
+def patch_config(path, discovered_hosts):
     path.parent.mkdir(parents=True, exist_ok=True)
     config = load_config(path)
     if not isinstance(config, dict):
@@ -378,11 +526,14 @@ def patch_config(path):
 
     for printer in printers:
         serial = printer["serial"]
-        connect_host = get_connect_host(printer)
+        connect_host = get_connect_host(printer, discovered_hosts)
         config["access_code"][serial] = printer["access_code"]
         config["user_access_code"][serial] = printer["access_code"]
-        config["ip_address"][serial] = connect_host
-        config["user_access_dev_ip"][serial] = encode_dev_ip(connect_host, slicer_uuid)
+        if connect_host:
+            config["ip_address"][serial] = connect_host
+            config["user_access_dev_ip"][serial] = encode_dev_ip(connect_host, slicer_uuid)
+        else:
+            print(f"Warning: Could not discover IP for '{printer.get('name', serial)}' ({serial}). Skipping IP configuration for this printer.")
 
     if path.exists():
         backup = path.with_name(path.name + ".bak." + datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
@@ -392,9 +543,11 @@ def patch_config(path):
     path.write_text(json.dumps(config, indent=4, ensure_ascii=False) + "\n")
     print(f"Configured Bambuddy printers in: {path}")
 
+discovered_hosts = discover_printers([p.get("serial") for p in printers])
+
 for entry in configs:
     if should_patch(entry):
-        patch_config(entry["path"])
+        patch_config(entry["path"], discovered_hosts)
 PY
 }
 
